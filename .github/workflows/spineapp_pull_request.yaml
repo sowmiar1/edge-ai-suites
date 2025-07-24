@@ -1,18 +1,11 @@
 name: "[Spine App] PR workflow"
 run-name: "[Spine App] PR  workflow (by @${{ github.actor }} via ${{ github.event_name }})"
-on:
-  push:
-    branches:
-      - 'main'
-    paths:
-      - 'manufacturing-ai-suite/industrial-edge-insights-vision/**'
-      
+on:  # yamllint disable-line rule:truthy
   pull_request:
-    paths:
-      - 'manufacturing-ai-suite/industrial-edge-insights-vision/**'
-      - 'github/workflows/**'
-      
-  workflow_call:
+    branches:
+      - main
+      - release-*
+  workflow_dispatch:
 permissions: {}
 
 jobs:
