@@ -59,7 +59,7 @@ VMS Adapter Plugin (VAP)                                                │
 ## Part 1 — Set Up Loitering Detection application
 
 ### 1.1 Configure the Lotiering Detection Environment
-Clone the edge-ai-suites repo as instructed in the setup document and install loitering detection as mentioned [here](../../../../metro-vision-ai-app-recipe/loitering-detection/docs/user-guide/get-started.md#set-up-and-first-use).
+Clone the edge-ai-suites repo as instructed in the setup document and install loitering detection as mentioned [here](https://docs.openedgeplatform.intel.com/dev/edge-ai-suites/loitering-detection/get-started.html#set-up-and-first-use).
 Do not bring up the application yet.
 
 > The above setup generates a docker-compose.yml file
@@ -517,7 +517,7 @@ Expected log output:
 2. Uncheck the **Enable Loitering Detection Pipeline** checkbox.
 3. Click **Apply** and then click **OK**.
 
-VAP stops the run on the next poll. 
+VAP stops the run on the next poll.
 
 Expected log output:
 
@@ -654,12 +654,12 @@ If detections do not appear, see the [Troubleshooting](#troubleshooting) section
 
 ### 7.3 Stop the plugin
 
-To stop the VAP, 
+To stop the VAP,
 
 ```bash
 docker compose down
 ```
- 
+
 
 > **CAUTION**: Be careful not to remove the volume, by `docker compose down -v` as this will delete the DB, as well as any integration info, credentials you created. If done, then the integration in Nx would be stale. Either delete from the Nx Witness, or use a different VMS integration name in `vms_shim/nxwitness/nx_integration.json` file.
 
