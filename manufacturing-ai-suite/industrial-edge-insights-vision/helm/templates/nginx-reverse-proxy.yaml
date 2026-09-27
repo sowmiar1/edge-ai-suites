@@ -75,6 +75,7 @@ spec:
       initContainers:
       - name: generate-certs
         image: alpine/openssl:3.5.4
+        workingDir: /tmp
         command: 
         - /bin/sh
         - /scripts/generate_certs.sh
@@ -91,6 +92,8 @@ spec:
           value: "{{ $.Values.env.S3_STORAGE_USERNAME }}"
         - name: S3_STORAGE_PASSWORD
           value: "{{ $.Values.env.S3_STORAGE_PASSWORD }}"
+        - name: TMPDIR
+          value: /tmp
         volumeMounts:
         - name: nginx-ssl
           mountPath: /etc/nginx/ssl
