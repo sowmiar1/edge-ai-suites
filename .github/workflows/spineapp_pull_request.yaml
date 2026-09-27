@@ -15,9 +15,7 @@ on:
   workflow_call:
 permissions: {}
 
-jobs:
-  
-          
+jobs:          
   virus-scan:
     name: Run Virus Scan
     runs-on: ubuntu-latest
@@ -59,16 +57,58 @@ jobs:
         run: |
           cd edge-ai-suites-repo/manufacturing-ai-suite/industrial-edge-insights-vision/
           echo "Scanning for .sh files and running ShellCheck..."
-          find . -type f -name "*.sh" | tee shell_files.txt | xargs -r shellcheck -f gcc > shellcheck_report.txt || true
+          find . -type f -name "*.sh" | tee shell_files.txt | xargs -r shellcheck -S error -f gcc > shellcheck_report.txt || scan_status=$?
           echo "### ShellCheck Results" >> $GITHUB_STEP_SUMMARY
           echo "Please find ShellCheck report in shellcheck_report.txt" >> $GITHUB_STEP_SUMMARY
           cp shellcheck_report.txt ${{ github.workspace }}
+          exit "${scan_status:-0}"
 
       - name: Upload ShellCheck report
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
         with:
           name: shellcheck-report
           path: shellcheck_report.txt
+
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bandit
+        run: |
+          python3 -m venv bandit_venv
+          bandit_venv/bin/pip install bandit
+
+      - name: Run Bandit
+        run: |
+          bandit_venv/bin/bandit -r manufacturing-ai-suite/industrial-edge-insights-vision/win-vision-ai \
+            -x manufacturing-ai-suite/industrial-edge-insights-vision/win-vision-ai/tests \
+            -f json -o bandit_report.json
+
+      - name: Summarize Bandit findings
+        if: always()
+        run: |
+          echo "## Bandit Scan Results" >> "$GITHUB_STEP_SUMMARY"
+          if [ ! -f bandit_report.json ]; then
+            echo "Bandit report was not generated." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          jq -r '"| Severity | Findings |\n|----------|----------|\n| HIGH | \([.results[] | select(.issue_severity == "HIGH")] | length) |\n| MEDIUM | \([.results[] | select(.issue_severity == "MEDIUM")] | length) |\n| LOW | \([.results[] | select(.issue_severity == "LOW")] | length) |"' bandit_report.json >> "$GITHUB_STEP_SUMMARY"
+          if jq -e '.results | length > 0' bandit_report.json > /dev/null; then
+            echo "Bandit found security issues; see the uploaded report for details." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Bandit report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
+        with:
+          name: bandit-report
+          path: bandit_report.json
 
   trivy-config-helm-scan:
     permissions:
@@ -134,11 +174,10 @@ jobs:
       - name: Trivy config scan for helm charts 
         run: |
           cd manufacturing-ai-suite/industrial-edge-insights-vision/helm
-          sed -i "s/username:*/username: user/g" values.yaml 
-          sed -i "s/password:*/password: password/g" values.yaml
-          trivy config . >> trivy-Spineapp-helm.txt
+          trivy config --helm-set-string webrtcturnserver.username=user,webrtcturnserver.password=password --severity HIGH,CRITICAL --exit-code 1 . > trivy-Spineapp-helm.txt
           
       - name: Upload Scan artifact to Github
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
         with:
           name: Trivy Report - Config scan for Helm
@@ -151,5 +190,86 @@ jobs:
     permissions:
       contents: read           
       packages: write
+
+  verify-scan-status:
+    name: Verify Scan Status
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [virus-scan, shellcheck, bandit, trivy-config-helm-scan, sanity]
+    steps:
+      - name: Generate scan status
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          names=("Virus Scan" "ShellCheck" "Bandit" "Trivy Helm Config" "Sanity")
+          statuses=("${{ needs.virus-scan.result }}" "${{ needs.shellcheck.result }}" "${{ needs.bandit.result }}" "${{ needs.trivy-config-helm-scan.result }}" "${{ needs.sanity.result }}")
+          passed=0
+          failed=0
+          skipped=0
+          failed_names=()
+          {
+            echo "## Security Scan Summary"
+            echo ""
+            echo "| Scan Job | Status |"
+            echo "|----------|--------|"
+            for index in "${!names[@]}"; do
+              case "${statuses[index]}" in
+                success)
+                  label="Passed"
+                  passed=$((passed + 1))
+                  ;;
+                failure)
+                  label="Failed"
+                  failed=$((failed + 1))
+                  failed_names+=("${names[index]}")
+                  ;;
+                skipped|cancelled)
+                  label="${statuses[index]}"
+                  skipped=$((skipped + 1))
+                  ;;
+                *) label="Unknown" ;;
+              esac
+              echo "| ${names[index]} | $label |"
+            done
+            echo ""
+            echo "### Overall Results"
+            echo "| Metric | Count |"
+            echo "|--------|-------|"
+            echo "| Total Jobs | ${#names[@]} |"
+            echo "| Passed | $passed |"
+            echo "| Failed | $failed |"
+            echo "| Skipped/Cancelled | $skipped |"
+            echo ""
+            if [ "$failed" -gt 0 ]; then
+              echo "**Status: FAILED** - ${failed_names[*]}"
+            elif [ "$passed" -eq "${#names[@]}" ]; then
+              echo "**Status: PASSED** - All jobs completed successfully"
+            elif [ "$skipped" -eq "${#names[@]}" ]; then
+              echo "**Status: SKIPPED** - All jobs were skipped or cancelled"
+            else
+              echo "**Status: PARTIAL** - $passed/${#names[@]} jobs passed"
+            fi
+            echo ""
+            echo "### Trigger Information"
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Event | $EVENT_NAME |"
+            echo "| Branch | $REF_NAME |"
+            echo "| Commit | [$COMMIT_SHA](https://github.com/$REPOSITORY/commit/$COMMIT_SHA) |"
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "| PR | [#$PR_NUMBER]($PR_URL) |"
+            fi
+            echo ""
+            echo "Completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" -gt 0 ]; then
+            echo "::error title=Security Scan Failed::Failed jobs: ${failed_names[*]}"
+            exit 1
+          fi
   
 
