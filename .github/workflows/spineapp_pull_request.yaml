@@ -193,7 +193,31 @@ jobs:
       - name: Trivy config scan for helm charts 
         run: |
           cd manufacturing-ai-suite/industrial-edge-insights-vision/helm
-          sed -E -i 's/^([[:space:]]*username:).*/\1 user/; s/^([[:space:]]*password:).*/\1 password/' values.yaml
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("values.yaml")
+          lines = path.read_text().splitlines()
+          updated = []
+          in_turn_section = False
+          for line in lines:
+              stripped = line.lstrip()
+              if line.startswith("webrtcturnserver:"):
+                  in_turn_section = True
+                  updated.append(line)
+                  continue
+              if in_turn_section and line and not line.startswith(" "):
+                  in_turn_section = False
+              if in_turn_section and stripped.startswith("username:"):
+                  indent = line[: len(line) - len(stripped)]
+                  updated.append(f"{indent}username: user")
+                  continue
+              if in_turn_section and stripped.startswith("password:"):
+                  indent = line[: len(line) - len(stripped)]
+                  updated.append(f"{indent}password: password")
+                  continue
+              updated.append(line)
+          path.write_text("\\n".join(updated) + "\\n")
+          PY
           trivy config --skip-check KSV-0014 --skip-check KSV-0118 --severity HIGH,CRITICAL --exit-code 1 . > trivy-Spineapp-helm.txt
           
       - name: Upload Scan artifact to Github
