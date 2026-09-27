@@ -67,52 +67,26 @@ spec:
       labels:
         app: nginx-reverse-proxy
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 101
-        runAsGroup: 101
-        fsGroup: 101
       initContainers:
       - name: generate-certs
         image: alpine/openssl:3.5.4
-        workingDir: /tmp
         command: 
         - /bin/sh
         - /scripts/generate_certs.sh
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 101
-          capabilities:
-            drop:
-              - ALL
         env:
         - name: S3_STORAGE_USERNAME
           value: "{{ $.Values.env.S3_STORAGE_USERNAME }}"
         - name: S3_STORAGE_PASSWORD
           value: "{{ $.Values.env.S3_STORAGE_PASSWORD }}"
-        - name: TMPDIR
-          value: /tmp
         volumeMounts:
         - name: nginx-ssl
           mountPath: /etc/nginx/ssl
         - name: nginx-scripts
           mountPath: /scripts
-        - name: nginx-tmp
-          mountPath: /tmp
       containers:
       - name: nginx-reverse-proxy
         image: {{ $.Values.images.nginx }}
         imagePullPolicy: {{ $.Values.imagePullPolicy }}
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 101
-          capabilities:
-            drop:
-              - ALL
         ports:
         - containerPort: {{ $.Values.config.nginx.int.http_port }}
         - containerPort: {{ $.Values.config.nginx.int.https_port }}
@@ -131,12 +105,6 @@ spec:
           subPath: nginx.conf
         - name: nginx-ssl
           mountPath: /etc/nginx/ssl
-        - name: nginx-run
-          mountPath: /var/run
-        - name: nginx-cache
-          mountPath: /var/cache/nginx
-        - name: nginx-tmp
-          mountPath: /tmp
       volumes:
       - name: nginx-conf
         configMap:
@@ -152,10 +120,4 @@ spec:
             path: generate_certs.sh
             mode: 0755
       - name: nginx-ssl
-        emptyDir: {}
-      - name: nginx-run
-        emptyDir: {}
-      - name: nginx-cache
-        emptyDir: {}
-      - name: nginx-tmp
         emptyDir: {}
