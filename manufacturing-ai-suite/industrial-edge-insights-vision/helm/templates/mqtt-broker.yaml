@@ -39,10 +39,22 @@ spec:
       labels:
         app: mqtt-broker
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
       containers:
       - name: {{ $.Values.config.mqtt_broker.name }}
         image: {{ $.Values.images.mqtt_broker }}
         imagePullPolicy: {{ $.Values.imagePullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1883
+          capabilities:
+            drop:
+              - ALL
         ports:
         - containerPort: {{ $.Values.config.mqtt_broker.int.mqtt_port }}
         volumeMounts:
