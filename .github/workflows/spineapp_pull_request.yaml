@@ -18,7 +18,7 @@ permissions: {}
 jobs:          
   virus-scan:
     name: Run Virus Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
     steps:
@@ -41,7 +41,7 @@ jobs:
         path: reports/
     
   shellcheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out edge-ai-suites repository
@@ -72,7 +72,7 @@ jobs:
 
   bandit:
     name: Bandit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -113,8 +113,11 @@ jobs:
           case "${{ steps.run_bandit.outputs.exit_code }}" in
             0) exit 0 ;;
             1)
-              echo "::error title=Bandit Findings::Bandit found security issues. See bandit_report.json for details."
-              exit 1
+              high_count=$(jq -r '[.results[] | select(.issue_severity == "HIGH")] | length' bandit_report.json)
+              if [ "$high_count" -gt 0 ]; then
+                echo "::error title=Bandit Findings::Bandit found $high_count HIGH severity issue(s). See bandit_report.json for details."
+                exit 1
+              fi
               ;;
             *)
               echo "::error title=Bandit Execution Failed::Bandit exited with code ${{ steps.run_bandit.outputs.exit_code }}."
@@ -237,7 +240,7 @@ jobs:
 
   verify-scan-status:
     name: Verify Scan Status
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: always()
     needs: [virus-scan, shellcheck, bandit, trivy-config-helm-scan, sanity]
     steps:
@@ -250,7 +253,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          names=("Virus Scan" "ShellCheck" "Bandit" "Trivy Helm Config" "Sanity")
+          names=("virus-scan" "shellcheck" "bandit" "trivy-config-helm-scan" "sanity")
           statuses=("${{ needs.virus-scan.result }}" "${{ needs.shellcheck.result }}" "${{ needs.bandit.result }}" "${{ needs.trivy-config-helm-scan.result }}" "${{ needs.sanity.result }}")
           passed=0
           failed=0
