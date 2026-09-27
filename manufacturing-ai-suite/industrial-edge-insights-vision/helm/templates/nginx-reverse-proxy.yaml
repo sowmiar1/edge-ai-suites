@@ -96,6 +96,8 @@ spec:
           mountPath: /etc/nginx/ssl
         - name: nginx-scripts
           mountPath: /scripts
+        - name: nginx-tmp
+          mountPath: /tmp
       containers:
       - name: nginx-reverse-proxy
         image: {{ $.Values.images.nginx }}
@@ -130,6 +132,8 @@ spec:
           mountPath: /var/run
         - name: nginx-cache
           mountPath: /var/cache/nginx
+        - name: nginx-tmp
+          mountPath: /tmp
       volumes:
       - name: nginx-conf
         configMap:
@@ -149,4 +153,6 @@ spec:
       - name: nginx-run
         emptyDir: {}
       - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-tmp
         emptyDir: {}
