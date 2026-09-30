@@ -136,8 +136,32 @@ jobs:
     - name: Trivy Config Scan
       run: |
         cd edge-ai-suites-repo/metro-ai-suite/image-based-video-search
-        trivy config . -s HIGH,CRITICAL -o trivy-config.txt
-        mv trivy-config.txt ${{ github.workspace }}/reports/Trivy
+        trivy config . -s HIGH,CRITICAL --format json -o trivy-config.json
+    - name: Summarize Trivy config findings
+      if: always()
+      run: |
+        report="edge-ai-suites-repo/metro-ai-suite/image-based-video-search/trivy-config.json"
+        table="reports/Trivy/trivy-config.txt"
+        mkdir -p reports/Trivy
+        echo "## Trivy Config Findings" >> "$GITHUB_STEP_SUMMARY"
+        if [ ! -s "$report" ]; then
+          echo "Trivy JSON report was not generated." | tee "$table" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        high_count=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")
+        critical_count=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")
+        {
+          echo "| File | Line | Severity | Rule | Finding | Resolution |"
+          echo "|------|-----:|----------|------|---------|------------|"
+          jq -r '.Results[]? as $result | $result.Misconfigurations[]? | "| \($result.Target | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " ")) | \(.CauseMetadata.StartLine // "N/A") | \(.Severity) | \(.ID) | \(.Title | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " ")) | \(.Resolution // "" | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " ")) |"' "$report"
+          if [ "$high_count" -eq 0 ] && [ "$critical_count" -eq 0 ]; then
+            echo "| - | - | - | - | No HIGH or CRITICAL findings | - |"
+          fi
+        } > "$table"
+        cat "$table" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "HIGH: $high_count | CRITICAL: $critical_count" >> "$GITHUB_STEP_SUMMARY"
+        cp "$report" reports/Trivy/trivy-config.json
     - name: Trivy FS Scan
       run: |
         cd edge-ai-suites-repo/metro-ai-suite/image-based-video-search
@@ -161,21 +185,104 @@ jobs:
       with:
         persist-credentials: false
         path: edge-ai-suites-repo
+
+    - name: Install ShellCheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+
+    - name: Run ShellCheck Scan
+      run: |
+        cd edge-ai-suites-repo/metro-ai-suite/image-based-video-search/
+        mkdir -p "$GITHUB_WORKSPACE/reports"
+        find . -type f -name "*.sh" -print0 | xargs -0 -r shellcheck -f gcc > "$GITHUB_WORKSPACE/reports/shellcheck-report.txt" || true
+        report="$GITHUB_WORKSPACE/reports/shellcheck-report.txt"
+        issue_count=$(wc -l < "$report")
+        {
+          echo "## ShellCheck Findings"
+          echo "| File | Line | Column | Severity | Code | Finding |"
+          echo "|------|-----:|-------:|----------|------|---------|"
+          if [ "$issue_count" -gt 0 ]; then
+            while IFS=: read -r file line column diagnostic; do
+              severity="${diagnostic# }"
+              severity="${severity%%:*}"
+              finding="${diagnostic#*: }"
+              code="${finding##* \[}"
+              code="${code%\]}"
+              finding="${finding% \[*}"
+              file=$(printf '%s' "$file" | sed 's/|/\\|/g')
+              finding=$(printf '%s' "$finding" | sed 's/|/\\|/g')
+              printf '| %s | %s | %s | %s | %s | %s |\n' "$file" "$line" "$column" "$severity" "$code" "$finding"
+            done < "$report"
+          else
+            echo "| - | - | - | - | - | No findings |"
+          fi
+          echo ""
+          echo "Findings: $issue_count"
+          echo "Full report: shellcheck-report.txt"
+        } >> "$GITHUB_STEP_SUMMARY"
         
     - name: Run Virus Scan
       run: |
         mkdir -p reports
         docker pull clamav/clamav
-        echo "### Virus Scan Results" >> $GITHUB_STEP_SUMMARY
         docker run --rm -v "${{ github.workspace }}:/src" clamav/clamav clamscan -r  /src/edge-ai-suites-repo/metro-ai-suite/image-based-video-search/ > ./reports/clamav-report.txt || true
-        echo "Please find full report in clamav-report.txt" >> $GITHUB_STEP_SUMMARY
+        infected_count=$(awk '/ FOUND$/ { count++ } END { print count + 0 }' reports/clamav-report.txt)
+        {
+          echo "### Virus Scan Results"
+          echo "| Metric | Count |"
+          echo "|--------|------:|"
+          echo "| Infected files | $infected_count |"
+          echo ""
+          if [ "$infected_count" -gt 0 ]; then
+            echo "| File | Detection |"
+            echo "|------|-----------|"
+            awk '/ FOUND$/ { line = $0; sub(/ FOUND$/, "", line); file = line; sub(/: [^:]*$/, "", file); detection = line; sub(/^.*: /, "", detection); printf "| %s | %s |\n", file, detection }' reports/clamav-report.txt
+          else
+            echo "No infected files found."
+          fi
+          echo ""
+          echo "Full report: clamav-report.txt"
+        } >> "$GITHUB_STEP_SUMMARY"
     - name: Run Bandit Scan
       run: |
         mkdir -p reports
         docker pull ghcr.io/pycqa/bandit/bandit
-        echo "### Bandit Scan Results" >> $GITHUB_STEP_SUMMARY
         docker run --rm -v "${{ github.workspace }}:/src" ghcr.io/pycqa/bandit/bandit -r /src/edge-ai-suites-repo/metro-ai-suite/image-based-video-search/ -f txt -o /src/reports/bandit-report.txt || true >> $GITHUB_STEP_SUMMARY
-        echo "Please find full report in bandit-report.txt" >> $GITHUB_STEP_SUMMARY 
+        docker run --rm -v "${{ github.workspace }}:/src" ghcr.io/pycqa/bandit/bandit -r /src/edge-ai-suites-repo/metro-ai-suite/image-based-video-search/ -f json -o /src/reports/bandit-report.json || true
+
+    - name: Summarize Bandit findings
+      if: always()
+      run: |
+        report="reports/bandit-report.json"
+        echo "## Bandit Scan Findings" >> "$GITHUB_STEP_SUMMARY"
+        if [ ! -s "$report" ]; then
+          echo "Bandit JSON report was not generated. See bandit-report.txt for scan output." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        high_count=$(jq '[.results[]? | select(.issue_severity == "HIGH")] | length' "$report")
+        medium_count=$(jq '[.results[]? | select(.issue_severity == "MEDIUM")] | length' "$report")
+        low_count=$(jq '[.results[]? | select(.issue_severity == "LOW")] | length' "$report")
+        {
+          echo "| Severity | Count |"
+          echo "|----------|------:|"
+          echo "| HIGH | $high_count |"
+          echo "| MEDIUM | $medium_count |"
+          echo "| LOW | $low_count |"
+          echo ""
+          echo "| File | Line | Severity | Confidence | Test | Finding |"
+          echo "|------|-----:|----------|------------|------|---------|"
+          jq -r '.results[]? | [(.filename | gsub("[\\r\\n\\t]+"; " ")), (.line_number | tostring), .issue_severity, .issue_confidence, .test_id, (.issue_text | gsub("[\\r\\n\\t]+"; " "))] | @tsv' "$report" |
+          while IFS=$'\t' read -r file line severity confidence test finding; do
+            file=$(printf '%s' "$file" | sed 's/|/\\|/g')
+            finding=$(printf '%s' "$finding" | sed 's/|/\\|/g')
+            printf '| %s | %s | %s | %s | %s | %s |\n' "$file" "$line" "$severity" "$confidence" "$test" "$finding"
+          done
+          if [ "$((high_count + medium_count + low_count))" -eq 0 ]; then
+            echo "| - | - | - | - | - | No findings |"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "Full report: bandit-report.txt and bandit-report.json" >> "$GITHUB_STEP_SUMMARY"
     - name: Upload Scan Reports
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
       with:
