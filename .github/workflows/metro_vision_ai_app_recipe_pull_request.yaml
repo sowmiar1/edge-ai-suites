@@ -33,9 +33,24 @@ jobs:
       run: |
         mkdir -p reports
         docker pull clamav/clamav
-        echo "### Virus Scan Results" >> $GITHUB_STEP_SUMMARY
         docker run --rm -v ${{ github.workspace }}:/src clamav/clamav clamscan -r  /src/edge-ai-suites-repo/metro-ai-suite/metro-vision-ai-app-recipe/ > ./reports/clamav-report.txt || true
-        echo "Please find full report in clamav-report.txt" >> $GITHUB_STEP_SUMMARY 
+        infected_count=$(awk '/ FOUND$/ { count++ } END { print count + 0 }' reports/clamav-report.txt)
+        {
+          echo "### Virus Scan Results"
+          echo "| Metric | Count |"
+          echo "|--------|------:|"
+          echo "| Infected files | $infected_count |"
+          echo ""
+          if [ "$infected_count" -gt 0 ]; then
+            echo "| File | Detection |"
+            echo "|------|-----------|"
+            awk '/ FOUND$/ { line = $0; sub(/ FOUND$/, "", line); file = line; sub(/: [^:]*$/, "", file); detection = line; sub(/^.*: /, "", detection); printf "| %s | %s |\n", file, detection }' reports/clamav-report.txt
+          else
+            echo "No infected files found."
+          fi
+          echo ""
+          echo "Full report: clamav-report.txt"
+        } >> "$GITHUB_STEP_SUMMARY"
     - name: Upload Scan Reports
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
       with:
@@ -66,8 +81,30 @@ jobs:
           cd edge-ai-suites-repo/metro-ai-suite/metro-vision-ai-app-recipe/
           echo "Scanning for .sh files and running ShellCheck..."
           find . -type f -name "*.sh" | tee shell_files.txt | xargs -r shellcheck -f gcc > shellcheck_report.txt || true
-          echo "### ShellCheck Results" >> $GITHUB_STEP_SUMMARY
-          echo "Please find ShellCheck report in shellcheck_report.txt" >> $GITHUB_STEP_SUMMARY
+          issue_count=$(wc -l < shellcheck_report.txt)
+          {
+            echo "### ShellCheck Results"
+            echo "| File | Line | Column | Severity | Code | Finding |"
+            echo "|------|-----:|-------:|----------|------|---------|"
+            if [ "$issue_count" -gt 0 ]; then
+              while IFS=: read -r file line column diagnostic; do
+                severity="${diagnostic# }"
+                severity="${severity%%:*}"
+                finding="${diagnostic#*: }"
+                code="${finding##* \[}"
+                code="${code%\]}"
+                finding="${finding% \[*}"
+                file=$(printf '%s' "$file" | sed 's/|/\\|/g')
+                finding=$(printf '%s' "$finding" | sed 's/|/\\|/g')
+                printf '| %s | %s | %s | %s | %s | %s |\n' "$file" "$line" "$column" "$severity" "$code" "$finding"
+              done < shellcheck_report.txt
+            else
+              echo "| - | - | - | - | - | No findings |"
+            fi
+            echo ""
+            echo "Findings: $issue_count"
+            echo "Full report: shellcheck_report.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
           cp shellcheck_report.txt ${{ github.workspace }}
 
       - name: Upload ShellCheck report
@@ -140,10 +177,37 @@ jobs:
       - name: Trivy config scan for helm charts 
         run: |
           cd metro-ai-suite/metro-vision-ai-app-recipe/
-          trivy config . --format table -s HIGH,CRITICAL -o trivy-helm.txt
+          trivy config . -s HIGH,CRITICAL --format json -o trivy-helm.json
+
+      - name: Summarize Trivy config findings
+        if: always()
+        run: |
+          report="metro-ai-suite/metro-vision-ai-app-recipe/trivy-helm.json"
+          table="metro-ai-suite/metro-vision-ai-app-recipe/trivy-helm.txt"
+          echo "## Trivy Helm Config Findings" >> "$GITHUB_STEP_SUMMARY"
+          if [ ! -s "$report" ]; then
+            echo "Trivy JSON report was not generated." | tee "$table" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          high_count=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")
+          critical_count=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")
+          {
+            echo "| File | Line | Severity | Rule | Finding | Resolution |"
+            echo "|------|-----:|----------|------|---------|------------|"
+            jq -r '.Results[]? as $result | $result.Misconfigurations[]? | "| \($result.Target | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " ")) | \(.CauseMetadata.StartLine // "N/A") | \(.Severity) | \(.ID) | \(.Title | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " ")) | \(.Resolution // "" | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " ")) |"' "$report"
+            if [ "$high_count" -eq 0 ] && [ "$critical_count" -eq 0 ]; then
+              echo "| - | - | - | - | No HIGH or CRITICAL findings | - |"
+            fi
+          } > "$table"
+          cat "$table" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "HIGH: $high_count | CRITICAL: $critical_count" >> "$GITHUB_STEP_SUMMARY"
           
       - name: Upload Scan artifact to Github
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
         with:
           name: Trivy Report - Config scan for Helm
-          path: metro-ai-suite/metro-vision-ai-app-recipe/trivy-helm.txt
+          path: |
+            metro-ai-suite/metro-vision-ai-app-recipe/trivy-helm.json
+            metro-ai-suite/metro-vision-ai-app-recipe/trivy-helm.txt
