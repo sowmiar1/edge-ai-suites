@@ -50,6 +50,7 @@ jobs:
           echo "Full report: clamav-report.txt"
         } >> "$GITHUB_STEP_SUMMARY"
     - name: Upload Scan Reports
+      if: always()
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
       with:
         name: virus-report
@@ -233,32 +234,13 @@ jobs:
       - name: Trivy config scan for helm charts 
         run: |
           cd manufacturing-ai-suite/industrial-edge-insights-vision/helm
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("values.yaml")
-          lines = path.read_text().splitlines()
-          updated = []
-          in_turn_section = False
-          for line in lines:
-              stripped = line.lstrip()
-              if line.startswith("webrtcturnserver:"):
-                  in_turn_section = True
-                  updated.append(line)
-                  continue
-              if in_turn_section and line and not line.startswith(" "):
-                  in_turn_section = False
-              if in_turn_section and stripped.startswith("username:"):
-                  indent = line[: len(line) - len(stripped)]
-                  updated.append(f"{indent}username: user")
-                  continue
-              if in_turn_section and stripped.startswith("password:"):
-                  indent = line[: len(line) - len(stripped)]
-                  updated.append(f"{indent}password: password")
-                  continue
-              updated.append(line)
-          path.write_text("\\n".join(updated) + "\\n")
-          PY
-          trivy config --skip-check KSV-0014 --skip-check KSV-0118 --severity HIGH,CRITICAL --exit-code 1 --format json --output trivy-Spineapp-helm.json .
+          ignore_file=$(mktemp)
+          trap 'rm -f "$ignore_file"' EXIT
+          printf '%s\n' AVD-KSV-0014 AVD-KSV-0118 > "$ignore_file"
+          trivy config --ignorefile "$ignore_file" \
+          --helm-set-string webrtcturnserver.username=user,webrtcturnserver.password=password \
+          --severity HIGH,CRITICAL --exit-code 1 \
+          --format json --output trivy-Spineapp-helm.json .
 
       - name: Summarize Trivy config findings
         if: always()
