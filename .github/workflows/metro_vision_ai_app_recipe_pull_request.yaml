@@ -11,9 +11,12 @@ on:
     paths:
       - 'metro-ai-suite/metro-vision-ai-app-recipe/**'
       
-      
+  workflow_dispatch:
+
   workflow_call:
 permissions: {}
+
+
 
 jobs:
   
