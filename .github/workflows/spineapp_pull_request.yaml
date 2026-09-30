@@ -110,6 +110,8 @@ jobs:
 
   bandit:
     name: Bandit
+    outputs:
+      high_findings: ${{ steps.collect-bandit-high.outputs.has_high }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
@@ -163,6 +165,21 @@ jobs:
               ;;
           esac
 
+      - name: Collect Bandit HIGH findings
+        id: collect-bandit-high
+        if: always()
+        run: |
+          high_count=0
+          if [ -s bandit_report.json ]; then
+            high_count=$(jq '[.results[]? | select(.issue_severity == "HIGH")] | length' bandit_report.json)
+          fi
+          if [ "$high_count" -gt 0 ]; then
+            echo "has_high=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_high=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Bandit HIGH findings: $high_count"
+
       - name: Upload Bandit report
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
@@ -171,6 +188,8 @@ jobs:
           path: bandit_report.json
 
   trivy-config-helm-scan:
+    outputs:
+      high_findings: ${{ steps.collect-trivy-high.outputs.has_high }}
     permissions:
       contents: read
       packages: read          # needed for actions/checkout
@@ -265,6 +284,22 @@ jobs:
           cat "$table" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "HIGH: $high_count | CRITICAL: $critical_count" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect Trivy HIGH findings
+        id: collect-trivy-high
+        if: always()
+        run: |
+          report="manufacturing-ai-suite/industrial-edge-insights-vision/helm/trivy-Spineapp-helm.json"
+          high_count=0
+          if [ -s "$report" ]; then
+            high_count=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")
+          fi
+          if [ "$high_count" -gt 0 ]; then
+            echo "has_high=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_high=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Trivy HIGH findings: $high_count"
           
       - name: Upload Scan artifact to Github
         if: always()
@@ -362,5 +397,40 @@ jobs:
           if [ "$failed" -gt 0 ]; then
             echo "::error title=Security Scan Failed::Failed jobs: ${failed_names[*]}"
             exit 1
+          fi
+
+  comment-high-findings:
+    name: Comment on HIGH findings
+    runs-on: ubuntu-24.04
+    needs: [bandit, trivy-config-helm-scan]
+    if: always() && github.event_name == 'pull_request' && (needs.bandit.outputs.high_findings == 'true' || needs.trivy-config-helm-scan.outputs.high_findings == 'true')
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Create or update HIGH findings comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BANDIT_HIGH: ${{ needs.bandit.outputs.high_findings }}
+          TRIVY_HIGH: ${{ needs.trivy-config-helm-scan.outputs.high_findings }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          marker="<!-- spineapp-high-security-findings -->"
+          body="$marker"$'\n\n'"## HIGH severity security findings"$'\n'"HIGH-severity findings were detected. Review the scan job(s) below:"
+          if [ "$BANDIT_HIGH" = "true" ]; then
+            bandit_job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.name == "Bandit") | .html_url' | head -n 1)
+            bandit_job=${bandit_job:-$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID}
+            body+=$'\n'"| Bandit scan | [Open job]($bandit_job) |"
+          fi
+          if [ "$TRIVY_HIGH" = "true" ]; then
+            trivy_job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.name | contains("trivy-config-helm-scan")) | .html_url' | head -n 1)
+            trivy_job=${trivy_job:-$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID}
+            body+=$'\n'"| Trivy Helm config scan | [Open job]($trivy_job) |"
+          fi
+          comment_id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- spineapp-high-security-findings -->"))) | .id' | tail -n 1)
+          if [ -n "$comment_id" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" --method PATCH --field body="$body" > /dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --method POST --field body="$body" > /dev/null
           fi
   
